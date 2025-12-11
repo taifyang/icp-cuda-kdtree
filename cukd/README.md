@@ -1,1 +1,1 @@
-* [cukd](https://github.com/ingowald/cudaKDTree/tree/master/cukd)
+[https://github.com/ingowald/cudaKDTree/tree/master/cukd](https://github.com/ingowald/cudaKDTree/tree/master/cukd)
