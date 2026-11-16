@@ -34,30 +34,6 @@ GPUMatrix& GPUMatrix::operator=(GPUMatrix&& other) noexcept
     return *this;
 }
 
-__global__ void zero_kernel(GPUMatrix matrix)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= matrix.rows)
-        return;
-
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-    if (j >= matrix.cols)
-        return;
-
-    matrix(i, j) = 0;
-}
-
-GPUMatrix GPUMatrix::zero(size_t rows, size_t cols)
-{
-    GPUMatrix res(rows, cols);
-
-    dim3 blockdim(32, 32);
-    dim3 griddim((rows + blockdim.x - 1) / blockdim.x,(cols + blockdim.y - 1) / blockdim.y);
-    zero_kernel<<<griddim, blockdim>>>(res);
-
-    return res;
-}
-
 __global__ void eye_kernel(GPUMatrix matrix)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -123,17 +99,13 @@ Eigen::MatrixXf GPUMatrix::to_cpu() const
     return res;
 }
 
-__global__ void divide_kernel(GPUMatrix matrix, GPUMatrix divided)
+__global__ void divide_kernel(GPUMatrix matrix, GPUMatrix divided, float divisor)
 {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= matrix.rows)
-        return;
-
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (j >= matrix.cols)
         return;
 
-    divided(i, j) = matrix(i, j) / matrix.rows;
+    divided(0, j) = matrix(0, j) / divisor;
 }
 
 __global__ void sum_kernel(GPUMatrix matrix, GPUMatrix mean)
@@ -202,7 +174,9 @@ GPUMatrix GPUMatrix::sum_colwise() const
     blockdim_block_sum.x *= 2;
     dim3 griddim_block_sum((rows + blockdim_block_sum.x - 1) / blockdim_block_sum.x, (cols + blockdim_block_sum.y - 1) / blockdim_block_sum.y);
     blockdim_block_sum.x /= 2;
-    auto sums = GPUMatrix::zero(griddim_block_sum.x, cols);
+    // block_sum_kernel assigns every element of the result, so it needs no
+    // zeroing pass.
+    auto sums = GPUMatrix(griddim_block_sum.x, cols);
     block_sum_kernel<<<griddim_block_sum, blockdim_block_sum, blockdim_block_sum.x * cols * sizeof(float)>>>(*this,sums);
 
     if (sums.rows == 1)
@@ -214,13 +188,12 @@ GPUMatrix GPUMatrix::mean() const
 {
     assert(cols == 3);
 
-    auto divided = GPUMatrix(rows, cols);
+    auto sums = sum_colwise();
+    auto res = GPUMatrix(1, cols);
 
-    dim3 blockdim_divide(32, 32);
-    dim3 griddim_divide((rows + blockdim_divide.x - 1) / blockdim_divide.x, (cols + blockdim_divide.y - 1) / blockdim_divide.y);
-    divide_kernel<<<griddim_divide, blockdim_divide>>>(*this, divided);
+    divide_kernel<<<1, cols>>>(sums, res, static_cast<float>(rows));
 
-    return divided.sum_colwise();
+    return res;
 }
 
 __global__ void subtract_rowwise_kernel(GPUMatrix a, GPUMatrix b, GPUMatrix res)
@@ -341,76 +314,6 @@ GPUMatrix GPUMatrix::closest(const GPUMatrix& matrix) const
     dim3 griddim((rows + blockdim.x - 1) / blockdim.x);
     closest_kernel<<<griddim, blockdim>>>(*this, matrix, res);
 
-    return res;
-}
-
-__global__ void product_kernel(GPUMatrix a, GPUMatrix b, GPUMatrix res)
-{
-    int line = blockIdx.x * blockDim.x + threadIdx.x;
-    if (line >= res.rows)
-        return;
-
-    int i_a = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i_a >= a.cols)
-        return;
-
-    int i_b = blockIdx.z * blockDim.z + threadIdx.z;
-    if (i_b >= b.cols)
-        return;
-
-    int i = i_a * a.cols + i_b;
-    res(line, i) = a(line, i_a) * b(line, i_b);
-}
-
-__global__ void find_covariance_kernel(GPUMatrix products, GPUMatrix res)
-{
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
-    if (j >= res.rows)
-        return;
-
-    int k = blockIdx.y * blockDim.y + threadIdx.y;
-    if (k >= res.cols)
-        return;
-
-    int pos = j * res.cols + k;
-    res(j, k) = products(0, pos);
-}
-
-GPUMatrix GPUMatrix::find_covariance(const GPUMatrix& a, const GPUMatrix& b)
-{
-    assert(a.cols == 3);
-    assert(b.cols == 3);
-    assert(a.rows == b.rows);
-
-    auto products = GPUMatrix(a.rows, a.cols * b.cols);
-    dim3 blockdim_product(64, 4, 4);
-    dim3 griddim_product(
-        (products.rows + blockdim_product.x - 1) / blockdim_product.x,
-        (a.cols + blockdim_product.y - 1) / blockdim_product.y,
-        (b.cols + blockdim_product.z - 1) / blockdim_product.z);
-    product_kernel<<<griddim_product, blockdim_product>>>(a, b, products);
-
-    auto sums = products.sum_colwise();
-
-    auto res = GPUMatrix::zero(a.cols, b.cols);
-    dim3 blockdim(32, 32);
-    dim3 griddim((res.rows + blockdim.x - 1) / blockdim.x,(res.cols + blockdim.y - 1) / blockdim.y);
-    find_covariance_kernel<<<griddim, blockdim>>>(sums, res);
-
-    return res;
-}
-
-__global__ void transpose_kernel(GPUMatrix a, GPUMatrix res)
-{
-    for (size_t i = 0; i < a.rows; ++i)
-        for (size_t j = 0; j < a.cols; ++j)
-            res(j, i) = a(i, j);
-}
-
-GPUMatrix GPUMatrix::transpose() const
-{
-    GPUMatrix res(cols, rows);
-    transpose_kernel<<<1, 1>>>(*this, res);
     return res;
 }
 

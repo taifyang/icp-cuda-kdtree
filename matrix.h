@@ -44,13 +44,6 @@ public:
     GPUMatrix& operator=(GPUMatrix&& other) noexcept;
 
     /**
-        * @brief Create a new zero matrix.
-        * @param rows The number of rows.
-        * @param cols The number of columns.
-        * @return The 0-initialized matrix.
-        */
-    static GPUMatrix zero(size_t rows, size_t cols);
-    /**
         * @brief Create a new identity matrix.
         * @param n The number of rows and columns.
         * @return The identity-initialized matrix.
@@ -154,20 +147,6 @@ public:
         * @return The matrix containing the closest points.
         */
     GPUMatrix closest(const GPUMatrix& matrix) const;
-
-    /**
-        * @brief Transpose the matrix.
-        * @return The matrix containing the transpose.
-        */
-    GPUMatrix transpose() const;
-
-    /**
-        * @brief Find the covariance matrix between two matrices.
-        * @param a The first matrix.
-        * @param b The second matrix.
-        * @return The covariance matrix.
-        */
-    static GPUMatrix find_covariance(const GPUMatrix& a, const GPUMatrix& b);
 
     /**
         * @brief Find the squared distance between two points in to matrix.
